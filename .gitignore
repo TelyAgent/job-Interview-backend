@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+.env
+.env.production
+.env.local
+.DS_Store
+*.log
+.local/

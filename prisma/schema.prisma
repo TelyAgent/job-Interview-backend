@@ -1,0 +1,92 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id             String   @id @default(uuid())
+  workspaceId    String
+  createdBy      String
+  requestKey     String
+  requestHash    String
+  title          String
+  candidateName  String?
+  candidateEmail String?
+  jdText         String
+  version        Int      @default(1)
+  jdVersion      Int      @default(1)
+  reviewed       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  materials      ProjectMaterial[]
+  jobs           ParseJob[]
+  revisions      Revision[]
+  @@unique([workspaceId, createdBy, requestKey])
+  @@index([workspaceId, createdAt])
+}
+
+model Material {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  mime        String
+  size        Int
+  hash        String
+  storageKey  String
+  text        String
+  segments    Json
+  readStatus  String
+  errorCode   String?
+  createdAt   DateTime @default(now())
+  projects    ProjectMaterial[]
+  @@index([workspaceId, hash])
+}
+
+model ProjectMaterial {
+  projectId  String
+  materialId String
+  kind       String
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  material   Material @relation(fields: [materialId], references: [id])
+  @@id([projectId, materialId])
+}
+
+model ParseJob {
+  id           String   @id @default(uuid())
+  projectId    String
+  workspaceId  String
+  type         String
+  materialId   String?
+  inputVersion Int
+  input        Json
+  status       String   @default("queued")
+  attempt      Int      @default(0)
+  leaseToken   String?
+  leaseUntil   DateTime?
+  nextRunAt    DateTime @default(now())
+  errorCode    String?
+  result       Json?
+  model        String?
+  promptVersion String @default("intake-v1")
+  usage        Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  @@index([status, nextRunAt])
+  @@index([projectId, inputVersion])
+}
+
+model Revision {
+  id        String   @id @default(uuid())
+  projectId String
+  actorId   String
+  version   Int
+  payload   Json
+  createdAt DateTime @default(now())
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  @@unique([projectId, version])
+}
