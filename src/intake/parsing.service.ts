@@ -55,7 +55,7 @@ export class ParsingService implements OnModuleInit, OnModuleDestroy {
   }
   async retry(workspaceId: string, id: string) {
     const job = await this.get(workspaceId, id);
-    // Only JD/requirements extractions are pinned to a JD version; résumé parsing has none.
+    // Only JD-anchored extractions (jd, capability_cards) are pinned to a JD version; résumé parsing has none.
     if (job.jobId) {
       const owner = await this.db.job.findUniqueOrThrow({ where: { id: job.jobId } });
       if (job.inputVersion !== owner.jdVersion) throw new ConflictException({ code: 'VERSION_CONFLICT' });

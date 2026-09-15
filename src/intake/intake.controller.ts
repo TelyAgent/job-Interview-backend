@@ -31,8 +31,6 @@ export class IntakeController {
   job(@Req() req: { identity: Identity }, @Param('id') id: string) { return this.jobs.get(req.identity.workspaceId, id); }
   @Patch('jobs/:id/intake')
   reviewJob(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.jobs.review(req.identity, id, body); }
-  @Post('jobs/:id/requirements-extractions')
-  requirements(@Req() req: { identity: Identity }, @Param('id') id: string) { return this.jobs.extractRequirements(req.identity.workspaceId, id); }
   @Post('jobs/:id/materials')
   attachJobMaterial(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: { materialId: string }) { return this.jobs.attachMaterial(req.identity, id, body.materialId); }
 
@@ -53,6 +51,8 @@ export class IntakeController {
   createRound(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.rounds.createForTask(req.identity, id, body); }
   @Patch('rounds/:id')
   updateRound(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.rounds.update(req.identity, id, body); }
+  @Post('rounds/:id/schedule')
+  scheduleRound(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.rounds.schedule(req.identity, id, body); }
 
   @Get('parsing-jobs/:id')
   parsingJob(@Req() req: { identity: Identity }, @Param('id') id: string) { return this.parsing.get(req.identity.workspaceId, id); }

@@ -49,6 +49,14 @@ const roundFieldsShape = {
 };
 export const createRoundSchema = z.object(roundFieldsShape).partial().strict();
 export const updateRoundSchema = z.object({ version: z.number().int().positive(), status: roundStatusSchema, ...roundFieldsShape }).strict();
+// Setting the meeting time is a distinct action from editing round content (Plan vs
+// Schedule in the product flow); scheduledAt is an ISO datetime, always paired with the
+// timezone label it was picked in (display-only — no timezone math happens server-side).
+export const scheduleRoundSchema = z.object({
+  version: z.number().int().positive(),
+  scheduledAt: z.string().datetime(),
+  timezone: z.string().trim().min(1).max(64),
+}).strict();
 export type Segment = { id: string; text: string; page?: number };
 export type ParseInput = { segments: Segment[]; sourceId: string };
 const fact = z.object({ value: z.string().max(5000), segmentId: z.string(), quote: z.string().min(1).max(5000) }).strict();

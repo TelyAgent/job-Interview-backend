@@ -94,15 +94,6 @@ export class JobsService {
     return this.get(identity.workspaceId, id);
   }
 
-  async extractRequirements(workspaceId: string, id: string) {
-    const job = await this.get(workspaceId, id);
-    if (!job.jdText) throw new BadRequestException({ code: 'JD_REQUIRED' });
-    const existing = job.parseJobs.find((j) => j.type === 'requirements' && j.inputVersion === job.jdVersion && j.status !== 'failed');
-    if (existing) return existing;
-    return this.db.parseJob.create({ data: { jobId: id, workspaceId, type: 'requirements', inputVersion: job.jdVersion,
-      input: { sourceId: `jd:${job.jdVersion}`, segments: splitText(job.jdText) } } });
-  }
-
   async attachMaterial(identity: Identity, id: string, materialId: string) {
     await this.get(identity.workspaceId, id);
     const material = await this.db.material.findFirst({ where: { id: materialId, workspaceId: identity.workspaceId } });

@@ -45,6 +45,7 @@ model Job {
   parseJobs        ParseJob[]
   revisions        Revision[]
   tasks            InterviewTask[]
+  rubricVersions   RubricVersion[]
   @@unique([workspaceId, createdBy, requestKey])
   @@index([workspaceId, createdAt])
 }
@@ -128,12 +129,55 @@ model InterviewRound {
   status        String   @default("Planned") // Planned | completed
   version       Int      @default(1)
   interviewerId String?
+  scheduledAt   DateTime?
+  timezone      String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   task          InterviewTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
   interviewer   Interviewer?  @relation(fields: [interviewerId], references: [id])
   @@unique([taskId, sequence])
   @@index([taskId])
+}
+
+// Requirements & Rubric: a JD-level baseline, generated once per Job (see the Capability
+// Verification Cards addendum). Owned entirely by the `rubric` module — everything else
+// (intake, plan, brief) only ever reads a confirmed version, never writes into it.
+// `versionNumber` is the human-facing "Rubric v1/v2..."; `version` is the optimistic-lock
+// counter bumped on every edit/confirm, same split as Job.jdVersion vs Job.version.
+model RubricVersion {
+  id               String    @id @default(uuid())
+  workspaceId      String
+  jobId            String
+  versionNumber    Int
+  status           String    @default("draft") // draft | confirmed
+  version          Int       @default(1)
+  sourceParseJobId String?
+  confirmedBy      String?
+  confirmedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  job              Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  cards            CapabilityCard[]
+  @@unique([jobId, versionNumber])
+  @@index([workspaceId, jobId])
+}
+
+model CapabilityCard {
+  id                 String   @id @default(uuid())
+  workspaceId        String
+  rubricVersionId    String
+  requirement        String
+  responsibilityType String   // lead | collaborate | support
+  cardPriority       String   // P0 | P1 | P2
+  competencyTags     String   // comma-separated, same convention as InterviewRound.competencies
+  expectedEvidence   String
+  levelAnchors       Json     // { l1..l5: string }
+  weight             Int
+  sourceRefs         Json     // [{ segmentId, quote }]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  rubricVersion      RubricVersion @relation(fields: [rubricVersionId], references: [id], onDelete: Cascade)
+  @@index([rubricVersionId])
 }
 
 model Material {

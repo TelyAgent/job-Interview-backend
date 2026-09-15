@@ -1,11 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../persistence/prisma.service';
-import { createRoundSchema, updateRoundSchema, validate } from './contracts';
+import { createRoundSchema, updateRoundSchema, scheduleRoundSchema, validate } from './contracts';
 
 const ROUND_SELECT = {
   id: true, taskId: true, sequence: true, name: true, format: true, duration: true,
   competencies: true, questions: true, mandatory: true, notes: true, status: true, version: true,
+  scheduledAt: true, timezone: true,
   createdAt: true, interviewer: { select: { id: true, name: true, title: true } },
 } satisfies Prisma.InterviewRoundSelect;
 
@@ -25,6 +26,17 @@ export class RoundsService {
 
   async listForTask(workspaceId: string, taskId: string) {
     await this.getTask(workspaceId, taskId);
+    const existing = await this.db.interviewRound.findMany({ where: { taskId, workspaceId }, orderBy: { sequence: 'asc' }, select: ROUND_SELECT });
+    if (existing.length) return existing;
+    // Self-heals a task that reaches Plan with no rounds yet — either seeded/created
+    // before auto-round-creation existed, or a future task-creation path (e.g. a Resume
+    // Screening hand-off) that doesn't call createDefaultRounds itself. Concurrent callers
+    // racing this are resolved by the [taskId, sequence] unique constraint below.
+    try {
+      await this.db.$transaction((tx) => this.createDefaultRounds(tx, workspaceId, taskId));
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) throw error;
+    }
     return this.db.interviewRound.findMany({ where: { taskId, workspaceId }, orderBy: { sequence: 'asc' }, select: ROUND_SELECT });
   }
 
@@ -64,6 +76,19 @@ export class RoundsService {
         questions: input.questions, mandatory, notes: input.notes, status: input.status,
         interviewerId: input.interviewerId, version: { increment: 1 },
       },
+    });
+    if (!updated.count) throw new ConflictException({ code: 'VERSION_CONFLICT' });
+    return this.db.interviewRound.findUniqueOrThrow({ where: { id: roundId }, select: ROUND_SELECT });
+  }
+
+  /** Sets or moves a round's meeting time — distinct from `update`, which edits round content. */
+  async schedule(identity: { workspaceId: string }, roundId: string, raw: unknown) {
+    const input = validate(scheduleRoundSchema, raw);
+    const existing = await this.db.interviewRound.findFirst({ where: { id: roundId, workspaceId: identity.workspaceId } });
+    if (!existing) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const updated = await this.db.interviewRound.updateMany({
+      where: { id: roundId, workspaceId: identity.workspaceId, version: input.version },
+      data: { scheduledAt: new Date(input.scheduledAt), timezone: input.timezone, version: { increment: 1 } },
     });
     if (!updated.count) throw new ConflictException({ code: 'VERSION_CONFLICT' });
     return this.db.interviewRound.findUniqueOrThrow({ where: { id: roundId }, select: ROUND_SELECT });
