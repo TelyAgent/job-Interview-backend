@@ -2,11 +2,22 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { PDFParse } from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import { PrismaService } from '../persistence/prisma.service';
 import type { Segment } from './contracts';
+
+// pdfjs-dist (pdf-parse's engine) needs its own cmaps/ resource files to resolve a PDF's
+// predefined, non-embedded CJK CID fonts (a common pattern — ReportLab-generated Chinese
+// PDFs included — where the font is referenced by name like "STSong-Light" with encoding
+// "UniGB-UCS2-H" but no font program is embedded). Without cMapUrl configured, pdf.js
+// silently drops every glyph it can't map and returns only whatever survives from simple
+// Latin-encoded fonts (e.g. bullet markers) — not an error, just wrong, so it's easy to
+// miss. require.resolve locates the installed package regardless of CWD.
+const PDFJS_DIR = dirname(require.resolve('pdfjs-dist/package.json'));
+const PDF_CMAP_URL = join(PDFJS_DIR, 'cmaps') + '/';
+const PDF_STANDARD_FONT_DATA_URL = join(PDFJS_DIR, 'standard_fonts') + '/';
 
 @Injectable()
 export class MaterialsService {
@@ -26,7 +37,7 @@ export class MaterialsService {
     let errorCode: string | null = null;
     try {
       if (ext === '.pdf') {
-        const parser = new PDFParse({ data: file.buffer });
+        const parser = new PDFParse({ data: file.buffer, cMapUrl: PDF_CMAP_URL, cMapPacked: true, standardFontDataUrl: PDF_STANDARD_FONT_DATA_URL });
         try {
           const result = await parser.getText();
           segments = result.pages.flatMap((p) => splitText(p.text, p.num));

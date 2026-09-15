@@ -158,6 +158,7 @@ model RubricVersion {
   updatedAt        DateTime  @updatedAt
   job              Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
   cards            CapabilityCard[]
+  questions        InterviewQuestion[]
   @@unique([jobId, versionNumber])
   @@index([workspaceId, jobId])
 }
@@ -177,7 +178,32 @@ model CapabilityCard {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
   rubricVersion      RubricVersion @relation(fields: [rubricVersionId], references: [id], onDelete: Cascade)
+  question           InterviewQuestion?
   @@index([rubricVersionId])
+}
+
+// Interview Brief: a STAR (Situation/Task/Action/Result) follow-up set generated once per
+// confirmed capability card — see the `brief` module. One row per card (not per round):
+// with no candidate resume matching yet (a later phase), a round-level split has nothing
+// real to key off, so the Brief page shows the whole confirmed card set and lets the
+// interviewer judge which cards fit the round in front of them.
+model InterviewQuestion {
+  id               String   @id @default(uuid())
+  workspaceId      String
+  rubricVersionId  String
+  cardId           String   @unique
+  situationPrompt  String
+  taskPrompt       String
+  actionPrompt     String
+  resultPrompt     String
+  mandatory        Boolean  @default(false)
+  sourceParseJobId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  rubricVersion    RubricVersion  @relation(fields: [rubricVersionId], references: [id], onDelete: Cascade)
+  card             CapabilityCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  @@index([rubricVersionId])
+  @@index([sourceParseJobId])
 }
 
 model Material {

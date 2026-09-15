@@ -56,7 +56,10 @@ export class TasksService {
     const task = await this.db.interviewTask.findFirst({ where: { id, workspaceId }, include: {
       job: { select: { id: true, title: true, department: true, location: true, level: true, jdText: true, jdVersion: true } },
       candidate: { select: { id: true, name: true, email: true, phone: true } },
-      resume: { include: { material: { select: { id: true, name: true, text: true, segments: true, readStatus: true, errorCode: true } } } },
+      resume: { include: {
+        material: { select: { id: true, name: true, text: true, segments: true, readStatus: true, errorCode: true } },
+        parseJobs: { orderBy: { createdAt: 'desc' }, take: 1, select: { status: true, result: true } },
+      } },
       materials: { include: { material: { select: { id: true, name: true, text: true, segments: true, readStatus: true, errorCode: true } } } },
       parseJobs: { orderBy: { createdAt: 'desc' }, select: { id: true, type: true, materialId: true, inputVersion: true, status: true, errorCode: true, result: true, attempt: true } },
       rounds: { orderBy: { sequence: 'asc' }, select: {

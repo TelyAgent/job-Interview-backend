@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { z } from 'zod';
 import { extractionSchema, type ParseInput } from './contracts';
 import { cardGenerationSchema, CARD_GENERATION_SYSTEM_PROMPT, collectCardRefs } from '../rubric/contracts';
+import { questionGenerationSchema, QUESTION_GENERATION_SYSTEM_PROMPT, collectQuestionRefs } from '../brief/contracts';
 
 export class ParseFailure extends Error {
   constructor(public readonly code: string, public readonly retryable = false) { super(code); }
@@ -35,9 +36,14 @@ function collectFactRefs(parsed: z.infer<typeof extractionSchema>): SourceRef[] 
 // its own schema, prompt and citation shape; this table is only the lookup — the actual
 // HTTP call, JSON-Schema validation and source-quote verification below are generic.
 const EXTRACTION_TYPES: Record<string, ExtractionConfig<any>> = {
-  jd: { schema: extractionSchema, systemPrompt: JD_RESUME_PROMPT('jd'), collectRefs: collectFactRefs },
-  resume: { schema: extractionSchema, systemPrompt: JD_RESUME_PROMPT('resume'), collectRefs: collectFactRefs },
+  // Empirically, even a single-object multi-field extraction (title/name/email/facts[])
+  // regularly exceeds the 60s default with gpt-5-mini once the input has real substantial
+  // content (a short/near-empty JD or résumé finishes fast; a real one often doesn't) —
+  // same lesson as capability_cards/brief_questions, just with a lighter task.
+  jd: { schema: extractionSchema, systemPrompt: JD_RESUME_PROMPT('jd'), collectRefs: collectFactRefs, timeoutSeconds: 120 },
+  resume: { schema: extractionSchema, systemPrompt: JD_RESUME_PROMPT('resume'), collectRefs: collectFactRefs, timeoutSeconds: 120 },
   capability_cards: { schema: cardGenerationSchema, systemPrompt: CARD_GENERATION_SYSTEM_PROMPT, collectRefs: collectCardRefs, timeoutSeconds: 240 },
+  brief_questions: { schema: questionGenerationSchema, systemPrompt: QUESTION_GENERATION_SYSTEM_PROMPT, collectRefs: collectQuestionRefs, timeoutSeconds: 240 },
 };
 
 @Injectable()
