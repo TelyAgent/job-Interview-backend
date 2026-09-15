@@ -2,11 +2,12 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../persistence/prisma.service';
 import { createRoundSchema, updateRoundSchema, scheduleRoundSchema, validate } from './contracts';
+import { advanceTaskStatus } from './task-status';
 
 const ROUND_SELECT = {
   id: true, taskId: true, sequence: true, name: true, format: true, duration: true,
   competencies: true, questions: true, mandatory: true, notes: true, status: true, version: true,
-  scheduledAt: true, timezone: true,
+  scheduledAt: true, timezone: true, meetingLink: true,
   createdAt: true, interviewer: { select: { id: true, name: true, title: true } },
 } satisfies Prisma.InterviewRoundSelect;
 
@@ -88,9 +89,10 @@ export class RoundsService {
     if (!existing) throw new NotFoundException({ code: 'NOT_FOUND' });
     const updated = await this.db.interviewRound.updateMany({
       where: { id: roundId, workspaceId: identity.workspaceId, version: input.version },
-      data: { scheduledAt: new Date(input.scheduledAt), timezone: input.timezone, version: { increment: 1 } },
+      data: { scheduledAt: new Date(input.scheduledAt), timezone: input.timezone, meetingLink: input.meetingLink || null, version: { increment: 1 } },
     });
     if (!updated.count) throw new ConflictException({ code: 'VERSION_CONFLICT' });
+    await advanceTaskStatus(this.db, identity.workspaceId, existing.taskId, 'interview_in_progress');
     return this.db.interviewRound.findUniqueOrThrow({ where: { id: roundId }, select: ROUND_SELECT });
   }
 

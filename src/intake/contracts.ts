@@ -56,6 +56,10 @@ export const scheduleRoundSchema = z.object({
   version: z.number().int().positive(),
   scheduledAt: z.string().datetime(),
   timezone: z.string().trim().min(1).max(64),
+  // Pasted by the scheduler (Google Meet/Zoom/etc.) — an empty string clears it. No real
+  // calendar or meeting-provider integration is wired to this field; that's out of scope
+  // for the scheduling step itself (see meetings/ for the separate, real Zoom host flow).
+  meetingLink: z.string().trim().max(2000),
 }).strict();
 export type Segment = { id: string; text: string; page?: number };
 export type ParseInput = { segments: Segment[]; sourceId: string };

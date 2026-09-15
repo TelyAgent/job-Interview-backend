@@ -7,7 +7,23 @@ import { join } from 'node:path';
 import type { Identity } from '../intake/workspace.guard';
 import { MeetingsService } from './meetings.service';
 
-type Account = { id: string; name: string; clientId: string; access: string; refresh: string; expires: number; meeting?: { id: string; password: string; joinUrl: string }; creating?: boolean };
+type MeetingInfo = { id: string; password: string; joinUrl: string };
+// One Zoom account, many meetings — keyed by a caller-chosen string. "default" is the
+// account's original single meeting (Live Interview hosting, unaware of any specific
+// round); a real InterviewRound.id keys that round's own meeting (Schedule's generated
+// link). Each key gets its own independent create-once-then-reuse lifecycle.
+type Account = {
+  id: string; name: string; clientId: string; access: string; refresh: string; expires: number;
+  meetings?: Record<string, MeetingInfo>;
+  // The single key currently mid-creation (an outcome-uncertain create must never be
+  // silently repeated) — at most one at a time, since `exclusive` serializes all work per owner.
+  pendingKey?: string;
+  /** @deprecated pre-per-round shape; migrated into meetings.default on read */
+  meeting?: MeetingInfo;
+  /** @deprecated pre-per-round shape; migrated into pendingKey on read */
+  creating?: boolean;
+};
+const DEFAULT_MEETING_KEY = 'default';
 type Pending = { server: Server; timer: NodeJS.Timeout; state: string };
 
 @Injectable()
@@ -45,7 +61,13 @@ export class ZoomHostService implements OnModuleDestroy {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
     const decipher = createDecipheriv('aes-256-gcm', await this.key(), data.subarray(0, 12));
     decipher.setAAD(Buffer.from(owner)); decipher.setAuthTag(data.subarray(12, 28));
-    return JSON.parse(Buffer.concat([decipher.update(data.subarray(28)), decipher.final()]).toString());
+    const account: Account = JSON.parse(Buffer.concat([decipher.update(data.subarray(28)), decipher.final()]).toString());
+    // Migrate the pre-per-round shape in memory; persisted back on the next save() (any
+    // write path already does one), never here — read() must stay side-effect-free.
+    if (account.meeting && !account.meetings) { account.meetings = { [DEFAULT_MEETING_KEY]: account.meeting }; }
+    if (account.creating && !account.pendingKey) { account.pendingKey = DEFAULT_MEETING_KEY; }
+    delete account.meeting; delete account.creating;
+    return account;
   }
   private async save(owner: string, account: Account) {
     const key = await this.key(); const iv = randomBytes(12);
@@ -75,7 +97,8 @@ export class ZoomHostService implements OnModuleDestroy {
   async status(identity: Identity) {
     this.enabled(); const owner = this.owner(identity); const account = await this.read(owner);
     const connected = !!account && account.clientId === this.config.get('ZOOM_OAUTH_PUBLIC_CLIENT_ID');
-    return { connected, name: connected ? account!.name : null, pending: this.pending.has(owner), error: this.failures.get(owner) || null, meeting: connected && account!.meeting ? { meetingNumber: account!.meeting.id, joinUrl: account!.meeting.joinUrl } : null };
+    const defaultMeeting = connected ? account!.meetings?.[DEFAULT_MEETING_KEY] : undefined;
+    return { connected, name: connected ? account!.name : null, pending: this.pending.has(owner), error: this.failures.get(owner) || null, meeting: defaultMeeting ? { meetingNumber: defaultMeeting.id, joinUrl: defaultMeeting.joinUrl } : null };
   }
 
   async authorize(identity: Identity) {
@@ -99,7 +122,7 @@ export class ZoomHostService implements OnModuleDestroy {
             const user = await this.call('https://api.zoom.us/v2/users/me', { headers: { Authorization: `Bearer ${tokens.access_token}` } }, 'PROFILE');
             if (!user.id) throw new Error('Invalid profile');
             const previous = await this.read(owner);
-            await this.save(owner, { id: user.id, name: user.display_name || user.first_name || 'Zoom host', clientId, access: tokens.access_token, refresh: tokens.refresh_token, expires: Date.now() + tokens.expires_in * 1000, ...(previous && previous.id === user.id ? { meeting: previous.meeting, creating: previous.creating } : {}) });
+            await this.save(owner, { id: user.id, name: user.display_name || user.first_name || 'Zoom host', clientId, access: tokens.access_token, refresh: tokens.refresh_token, expires: Date.now() + tokens.expires_in * 1000, ...(previous && previous.id === user.id ? { meetings: previous.meetings } : {}) });
           });
           res.end('Zoom connected. You can close this tab and return to HireOS.');
         } catch (error) {
@@ -133,36 +156,68 @@ export class ZoomHostService implements OnModuleDestroy {
     return account;
   }
 
-  async start(identity: Identity) {
+  // Creates the meeting for one key on first use (never repeats a create whose outcome is
+  // uncertain — see the 4xx-only reset below), and just returns it otherwise. Shared by
+  // `start` (the account's own "default" meeting, plus a ZAK token to host live) and
+  // `link` (any key — typically a real InterviewRound.id — no ZAK, no host-SDK signature,
+  // just a URL to attach to a scheduled round well before anyone hosts it).
+  private async ensureMeeting(owner: string, account: Account, key: string, topic: string): Promise<MeetingInfo> {
+    if (account.pendingKey === key) throw new BadRequestException({ code: 'ZOOM_CREATE_UNCERTAIN_CHECK_ACCOUNT' });
+    const existing = account.meetings?.[key];
+    if (existing) return existing;
+    const headers = { Authorization: `Bearer ${account.access}`, 'Content-Type': 'application/json' };
+    account.pendingKey = key; await this.save(owner, account);
+    const meeting = await this.call('https://api.zoom.us/v2/users/me/meetings', { method: 'POST', headers, body: JSON.stringify({ topic, type: 1, settings: { use_pmi: false, host_video: false, participant_video: false, join_before_host: false, waiting_room: true, auto_recording: 'none' } }) }, 'CREATE').catch(async error => {
+      const status = error.getResponse?.().providerStatus;
+      if (status >= 400 && status < 500) { account.pendingKey = undefined; await this.save(owner, account); }
+      throw error;
+    });
+    if (!meeting.id || !meeting.join_url || !meeting.password) throw new ServiceUnavailableException({ code: 'ZOOM_CREATE_UNCERTAIN_CHECK_ACCOUNT' });
+    const info: MeetingInfo = { id: String(meeting.id), password: meeting.password, joinUrl: meeting.join_url };
+    account.meetings = { ...(account.meetings || {}), [key]: info };
+    account.pendingKey = undefined;
+    await this.save(owner, account);
+    return info;
+  }
+
+  // `key` defaults to the account's own "default" meeting (Live Interview opened on its
+  // own, no specific round in mind); passing a real InterviewRound.id instead hosts —
+  // and, if Schedule already generated one, reuses — that round's own meeting, so joining
+  // from a round's "Join link" always lands in the same room that link points to.
+  async start(identity: Identity, key?: string, topic?: string) {
     this.enabled(); const owner = this.owner(identity);
     return this.exclusive(owner, async () => {
       const account = await this.account(owner);
-      if (account.creating) throw new BadRequestException({ code: 'ZOOM_CREATE_UNCERTAIN_CHECK_ACCOUNT' });
+      const meeting = await this.ensureMeeting(owner, account, key?.trim() || DEFAULT_MEETING_KEY, topic?.trim() || 'HireOS Interview');
       const headers = { Authorization: `Bearer ${account.access}`, 'Content-Type': 'application/json' };
-      if (!account.meeting) {
-        account.creating = true; await this.save(owner, account);
-        // Never automatically repeat a create request whose outcome is uncertain.
-        const meeting = await this.call('https://api.zoom.us/v2/users/me/meetings', { method: 'POST', headers, body: JSON.stringify({ topic: 'HireOS Interview', type: 1, settings: { use_pmi: false, host_video: false, participant_video: false, join_before_host: false, waiting_room: true, auto_recording: 'none' } }) }, 'CREATE').catch(async error => {
-          const status = error.getResponse?.().providerStatus;
-          if (status >= 400 && status < 500) { account.creating = false; await this.save(owner, account); }
-          throw error;
-        });
-        if (!meeting.id || !meeting.join_url || !meeting.password) throw new ServiceUnavailableException({ code: 'ZOOM_CREATE_UNCERTAIN_CHECK_ACCOUNT' });
-        account.meeting = { id: String(meeting.id), password: meeting.password, joinUrl: meeting.join_url }; account.creating = false;
-        await this.save(owner, account);
-      }
       const zak = await this.call('https://api.zoom.us/v2/users/me/zak', { headers }, 'ZAK');
       if (!zak.token) throw new ServiceUnavailableException({ code: 'ZOOM_ZAK_FAILED' });
-      return { ...this.signatures.hostConfig(account.meeting.id, account.meeting.password, account.name), zak: zak.token, joinUrl: account.meeting.joinUrl };
+      return { ...this.signatures.hostConfig(meeting.id, meeting.password, account.name), zak: zak.token, joinUrl: meeting.joinUrl };
     });
   }
 
-  async resetMeeting(identity: Identity) {
+  /** Ensures the meeting for `roundId` exists and returns just its link — no ZAK token, no
+   * host-SDK signature. Each round gets its own independent Zoom meeting, created once and
+   * reused on every subsequent call for the same round. */
+  async link(identity: Identity, roundId: string, topic?: string) {
+    this.enabled(); const owner = this.owner(identity);
+    return this.exclusive(owner, async () => {
+      const account = await this.account(owner);
+      const meeting = await this.ensureMeeting(owner, account, roundId, topic?.trim() || 'HireOS Interview');
+      return { meetingNumber: meeting.id, joinUrl: meeting.joinUrl };
+    });
+  }
+
+  /** Clears one meeting so the next `start`/`link` for that key creates a fresh one.
+   * Defaults to the account's own "default" (Live Interview) meeting when no key is given. */
+  async resetMeeting(identity: Identity, key?: string) {
     this.enabled(); const owner = this.owner(identity);
     return this.exclusive(owner, async () => {
       const account = await this.read(owner);
       if (!account) throw new BadRequestException({ code: 'ZOOM_CONNECT_REQUIRED' });
-      delete account.meeting; delete account.creating;
+      const target = key?.trim() || DEFAULT_MEETING_KEY;
+      if (account.meetings) delete account.meetings[target];
+      if (account.pendingKey === target) account.pendingKey = undefined;
       await this.save(owner, account);
       return { reset: true };
     });

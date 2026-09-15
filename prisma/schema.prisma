@@ -131,6 +131,7 @@ model InterviewRound {
   interviewerId String?
   scheduledAt   DateTime?
   timezone      String?
+  meetingLink   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   task          InterviewTask @relation(fields: [taskId], references: [id], onDelete: Cascade)

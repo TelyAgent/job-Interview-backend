@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Header, Headers, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Header, Headers, Post, Req, UseGuards } from '@nestjs/common';
 import { WorkspaceGuard, type Identity } from '../intake/workspace.guard';
 import { ZoomHostService } from './zoom-host.service';
 
@@ -18,8 +18,22 @@ export class ZoomHostController {
   authorize(@Req() req: { identity: Identity }, @Headers('x-hireos-zoom') header?: string) { this.mutation(header); return this.zoom.authorize(req.identity); }
   @Post('start')
   @Header('Cache-Control', 'no-store')
-  start(@Req() req: { identity: Identity }, @Headers('x-hireos-zoom') header?: string) { this.mutation(header); return this.zoom.start(req.identity); }
+  start(@Req() req: { identity: Identity }, @Headers('x-hireos-zoom') header?: string, @Body() body?: { roundId?: string; topic?: string }) {
+    this.mutation(header);
+    return this.zoom.start(req.identity, body?.roundId, body?.topic);
+  }
+  @Post('link')
+  @Header('Cache-Control', 'no-store')
+  link(@Req() req: { identity: Identity }, @Headers('x-hireos-zoom') header?: string, @Body() body?: { roundId?: string; topic?: string }) {
+    this.mutation(header);
+    const roundId = body?.roundId?.trim();
+    if (!roundId) throw new BadRequestException({ code: 'ZOOM_ROUND_ID_REQUIRED' });
+    return this.zoom.link(req.identity, roundId, body?.topic);
+  }
   @Post('reset-meeting')
   @Header('Cache-Control', 'no-store')
-  reset(@Req() req: { identity: Identity }, @Headers('x-hireos-zoom') header?: string) { this.mutation(header); return this.zoom.resetMeeting(req.identity); }
+  reset(@Req() req: { identity: Identity }, @Headers('x-hireos-zoom') header?: string, @Body() body?: { roundId?: string }) {
+    this.mutation(header);
+    return this.zoom.resetMeeting(req.identity, body?.roundId);
+  }
 }

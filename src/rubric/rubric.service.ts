@@ -5,6 +5,7 @@ import { splitText } from '../intake/materials.service';
 import type { ParseInput } from '../intake/contracts';
 import type { Identity } from '../intake/workspace.guard';
 import { updateRubricSchema, confirmRubricSchema, validate, type cardGenerationSchema } from './contracts';
+import { advanceTasksStatusForJob } from '../intake/task-status';
 import type { z } from 'zod';
 
 const RUBRIC_SELECT = {
@@ -89,6 +90,7 @@ export class RubricService {
       data: { status: 'confirmed', confirmedBy: identity.actorId, confirmedAt: new Date(), version: { increment: 1 } },
     });
     if (!updated.count) throw new ConflictException({ code: 'VERSION_CONFLICT' });
+    await advanceTasksStatusForJob(this.db, identity.workspaceId, jobId, 'requirements_ready');
     return this.db.rubricVersion.findUniqueOrThrow({ where: { id: draft.id }, select: RUBRIC_SELECT });
   }
 

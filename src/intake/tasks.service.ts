@@ -49,6 +49,7 @@ export class TasksService {
         matchScore: true, matchRecommendation: true, createdAt: true,
         job: { select: { title: true } },
         candidate: { select: { id: true, name: true, email: true } },
+        rounds: { select: { status: true } },
       } });
   }
 
