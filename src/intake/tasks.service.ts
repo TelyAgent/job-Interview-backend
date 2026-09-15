@@ -3,11 +3,12 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../persistence/prisma.service';
 import { attachTaskMaterialSchema, createTaskSchema, reviewTaskSchema, validate } from './contracts';
 import { CandidatesService } from './candidates.service';
+import { RoundsService } from './rounds.service';
 import type { Identity } from './workspace.guard';
 
 @Injectable()
 export class TasksService {
-  constructor(private readonly db: PrismaService, private readonly candidates: CandidatesService) {}
+  constructor(private readonly db: PrismaService, private readonly candidates: CandidatesService, private readonly rounds: RoundsService) {}
 
   /** Links one more résumé to an existing Job — the "link candidate" action. */
   async create(identity: Identity, jobId: string, raw: unknown) {
@@ -23,6 +24,7 @@ export class TasksService {
         const task = await tx.interviewTask.create({ data: {
           workspaceId: identity.workspaceId, createdBy: identity.actorId, jobId, candidateId, resumeId,
         } });
+        await this.rounds.createDefaultRounds(tx, identity.workspaceId, task.id);
         return task.id;
       });
       return this.get(identity.workspaceId, taskId);
@@ -57,6 +59,11 @@ export class TasksService {
       resume: { include: { material: { select: { id: true, name: true, text: true, segments: true, readStatus: true, errorCode: true } } } },
       materials: { include: { material: { select: { id: true, name: true, text: true, segments: true, readStatus: true, errorCode: true } } } },
       parseJobs: { orderBy: { createdAt: 'desc' }, select: { id: true, type: true, materialId: true, inputVersion: true, status: true, errorCode: true, result: true, attempt: true } },
+      rounds: { orderBy: { sequence: 'asc' }, select: {
+        id: true, sequence: true, name: true, format: true, duration: true, competencies: true,
+        questions: true, mandatory: true, notes: true, status: true, version: true, createdAt: true,
+        interviewer: { select: { id: true, name: true, title: true } },
+      } },
     } });
     if (!task) throw new NotFoundException({ code: 'NOT_FOUND' });
     return task;

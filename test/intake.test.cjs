@@ -118,6 +118,40 @@ test('intake persistence, validation, parsing and recovery', async (t) => {
       const refreshed = await (await fetch(`${base}/jobs/${job.id}`)).json();
       assert.equal(refreshed.tasks.length, 1);
     });
+    let interviewer;
+    await t.test('a task is created with two generic rounds automatically', async () => {
+      const rounds = await (await fetch(`${base}/tasks/${task.id}/rounds`)).json();
+      assert.equal(rounds.length, 2);
+      assert.deepEqual(rounds.map((r) => r.sequence), [1, 2]);
+      assert.deepEqual(rounds.map((r) => r.name), ['Round 1', 'Round 2']);
+      assert.ok(rounds.every((r) => r.status === 'Planned' && r.interviewer === null));
+    });
+    await t.test('a new round can be added manually and takes the next sequence number', async () => {
+      interviewer = await db.interviewer.create({ data: { workspaceId, name: 'Dana Scott', title: 'Panel Lead' } });
+      const response = await send(`/tasks/${task.id}/rounds`, { name: 'Culture round', interviewerId: interviewer.id, questions: 5, mandatory: 8 });
+      assert.equal(response.status, 201); const round = await response.json();
+      assert.equal(round.sequence, 3);
+      assert.equal(round.name, 'Culture round');
+      assert.equal(round.interviewer.name, 'Dana Scott');
+      assert.equal(round.mandatory, 5, 'mandatory is clamped to the question count');
+      const rounds = await (await fetch(`${base}/tasks/${task.id}/rounds`)).json();
+      assert.equal(rounds.length, 3);
+      assert.equal((await send(`/tasks/${task.id}/rounds`, { interviewerId: randomUUID() })).status, 400, 'unknown interviewer is rejected');
+      assert.equal((await send(`/tasks/${randomUUID()}/rounds`, {})).status, 404);
+    });
+    await t.test('round edits are versioned independently and validate the interviewer', async () => {
+      const rounds = await (await fetch(`${base}/tasks/${task.id}/rounds`)).json();
+      const round = rounds[0];
+      const body = { version: round.version, name: 'Round 1 — revised', format: 'Video interview', duration: 60,
+        competencies: 'System Design, Communication', questions: 4, mandatory: 2, notes: 'Focus on trade-offs.',
+        status: 'completed', interviewerId: interviewer.id };
+      let response = await send(`/rounds/${round.id}`, body, '', 'PATCH');
+      assert.equal(response.status, 200); const saved = await response.json();
+      assert.equal(saved.version, 2); assert.equal(saved.status, 'completed'); assert.equal(saved.interviewer.name, 'Dana Scott');
+      response = await send(`/rounds/${round.id}`, body, '', 'PATCH');
+      assert.equal(response.status, 409, 'stale version is rejected');
+      assert.equal((await send(`/rounds/${round.id}`, { ...body, version: 2, interviewerId: randomUUID() }, '', 'PATCH')).status, 400);
+    });
     await t.test('AI extraction is sourced and never silently edits job or candidate fields', async () => {
       await worker.tick(); await worker.tick();
       const jdParse = await db.parseJob.findFirst({ where: { jobId: job.id, type: 'jd' } });

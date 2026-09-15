@@ -5,11 +5,12 @@ import { PrismaService } from '../persistence/prisma.service';
 import { createJobSchema, reviewJobSchema, validate, type ParseInput } from './contracts';
 import { splitText } from './materials.service';
 import { CandidatesService } from './candidates.service';
+import { RoundsService } from './rounds.service';
 import type { Identity } from './workspace.guard';
 
 @Injectable()
 export class JobsService {
-  constructor(private readonly db: PrismaService, private readonly candidates: CandidatesService) {}
+  constructor(private readonly db: PrismaService, private readonly candidates: CandidatesService, private readonly rounds: RoundsService) {}
 
   async create(identity: Identity, key: string | undefined, raw: unknown): Promise<Awaited<ReturnType<JobsService['get']>>> {
     if (!key || key.length > 100) throw new BadRequestException({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
@@ -42,9 +43,10 @@ export class JobsService {
         // its own unique (job, candidate) task.
         for (const material of resumeMaterials) {
           const { candidateId, resumeId } = await this.candidates.findOrCreateFromResume(tx, identity.workspaceId, material);
-          await tx.interviewTask.create({ data: {
+          const task = await tx.interviewTask.create({ data: {
             workspaceId: identity.workspaceId, createdBy: identity.actorId, jobId: job.id, candidateId, resumeId,
           } });
+          await this.rounds.createDefaultRounds(tx, identity.workspaceId, task.id);
         }
         return job.id;
       });

@@ -7,6 +7,21 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// A person who can be assigned as the owner / lead interviewer of a plan round.
+// Standalone directory entry for now — not linked to Account & System Configuration's
+// membership records yet, since that module doesn't exist in this prototype.
+model Interviewer {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  title       String?
+  email       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  rounds      InterviewRound[]
+  @@index([workspaceId, createdAt])
+}
+
 // JD. One Job can be matched against many résumés handed off from Resume Screening;
 // a Job with zero tasks is still a valid JD-only draft (see InterviewTask below).
 model Job {
@@ -89,10 +104,36 @@ model InterviewTask {
   parseJobs            ParseJob[]
   revisions            Revision[]
   interviewSessions    InterviewSession[]
+  rounds               InterviewRound[]
   @@unique([jobId, candidateId])
   @@index([workspaceId, createdAt])
   @@index([jobId])
   @@index([candidateId])
+}
+
+// One round of a task's interview plan. Every task gets two generic rounds created for
+// it automatically (see TasksService); users can add more from there.
+model InterviewRound {
+  id            String   @id @default(uuid())
+  workspaceId   String
+  taskId        String
+  sequence      Int
+  name          String
+  format        String
+  duration      Int
+  competencies  String   // comma-separated; each becomes a tag in the UI
+  questions     Int
+  mandatory     Int
+  notes         String
+  status        String   @default("Planned") // Planned | completed
+  version       Int      @default(1)
+  interviewerId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  task          InterviewTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  interviewer   Interviewer?  @relation(fields: [interviewerId], references: [id])
+  @@unique([taskId, sequence])
+  @@index([taskId])
 }
 
 model Material {

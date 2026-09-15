@@ -3,6 +3,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { MaterialsService } from './materials.service';
 import { JobsService } from './jobs.service';
 import { TasksService } from './tasks.service';
+import { RoundsService } from './rounds.service';
 import { ParsingService } from './parsing.service';
 import { WorkspaceGuard, type Identity } from './workspace.guard';
 
@@ -13,6 +14,7 @@ export class IntakeController {
     private readonly materials: MaterialsService,
     private readonly jobs: JobsService,
     private readonly tasks: TasksService,
+    private readonly rounds: RoundsService,
     private readonly parsing: ParsingService,
   ) {}
   @Post('materials')
@@ -44,6 +46,13 @@ export class IntakeController {
   reviewTask(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.tasks.review(req.identity, id, body); }
   @Post('tasks/:id/materials')
   attachTaskMaterial(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.tasks.attach(req.identity, id, body); }
+
+  @Get('tasks/:id/rounds')
+  listRounds(@Req() req: { identity: Identity }, @Param('id') id: string) { return this.rounds.listForTask(req.identity.workspaceId, id); }
+  @Post('tasks/:id/rounds')
+  createRound(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.rounds.createForTask(req.identity, id, body); }
+  @Patch('rounds/:id')
+  updateRound(@Req() req: { identity: Identity }, @Param('id') id: string, @Body() body: unknown) { return this.rounds.update(req.identity, id, body); }
 
   @Get('parsing-jobs/:id')
   parsingJob(@Req() req: { identity: Identity }, @Param('id') id: string) { return this.parsing.get(req.identity.workspaceId, id); }

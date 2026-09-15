@@ -8,10 +8,36 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { PrismaClient } = require('@prisma/client');
 
 const BASE = process.env.API_BASE || 'http://127.0.0.1:3001/api';
 const JD_DIR = path.join(__dirname, '..', 'data', 'AI岗位描述样本');
 const RESUME_DIR = path.join(__dirname, '..', 'data', 'AI岗位简历样本');
+// Matches the dev-only identity WorkspaceGuard assigns (src/intake/workspace.guard.ts).
+const WORKSPACE_ID = 'local-workspace';
+
+// No creation flow exists for interviewers yet (they're a plain lookup table, not
+// something users upload), so these are inserted directly rather than through the API.
+const INTERVIEWERS = [
+  { name: 'David Kim', title: 'Hiring Manager', email: 'david.kim@example.com' },
+  { name: 'Priya Nair', title: 'Business Interviewer', email: 'priya.nair@example.com' },
+  { name: 'Sarah Chen', title: 'HR Manager', email: 'sarah.chen@example.com' },
+  { name: 'Marcus Webb', title: 'Technical Interviewer', email: 'marcus.webb@example.com' },
+];
+
+async function seedInterviewers() {
+  const db = new PrismaClient();
+  try {
+    for (const interviewer of INTERVIEWERS) {
+      const existing = await db.interviewer.findFirst({ where: { workspaceId: WORKSPACE_ID, name: interviewer.name } });
+      if (existing) continue;
+      await db.interviewer.create({ data: { workspaceId: WORKSPACE_ID, ...interviewer } });
+      console.log(`Created interviewer "${interviewer.name}"`);
+    }
+  } finally {
+    await db.$disconnect();
+  }
+}
 
 const JOBS = [
   { file: '01-高级AI产品经理-企业智能平台.txt', resumes: ['01-林若晨-AI产品经理.pdf'] },
@@ -51,6 +77,7 @@ async function createJob(jdMaterialId, resumeMaterialIds) {
 }
 
 async function main() {
+  await seedInterviewers();
   for (const job of JOBS) {
     const jdMaterial = await uploadMaterial(path.join(JD_DIR, job.file));
     const resumeMaterials = [];
