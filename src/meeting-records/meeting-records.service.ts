@@ -12,23 +12,24 @@ const noteInput = z.object({ version: z.number().int().min(0), content: z.string
 export class MeetingRecordsService {
   constructor(private readonly db: PrismaService) {}
 
-  projects(identity: Identity) {
-    // The development identity has no shared-project ACL yet: restrict to its own projects.
-    return this.db.project.findMany({
+  tasks(identity: Identity) {
+    // The development identity has no shared-task ACL yet: restrict to its own tasks.
+    return this.db.interviewTask.findMany({
       where: { workspaceId: identity.workspaceId, createdBy: identity.actorId },
-      select: { id: true, title: true }, orderBy: { createdAt: 'desc' }, take: 200,
+      select: { id: true, job: { select: { title: true } }, candidate: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' }, take: 200,
     });
   }
 
-  async create(identity: Identity, projectId: string, raw: unknown) {
+  async create(identity: Identity, taskId: string, raw: unknown) {
     const { round } = validate(sessionInput, raw);
-    const project = await this.db.project.findFirst({ where: { id: projectId, workspaceId: identity.workspaceId, createdBy: identity.actorId } });
-    if (!project) throw new NotFoundException({ code: 'RECORD_NOT_FOUND' });
-    const where = { projectId_round_createdBy: { projectId, round, createdBy: identity.actorId } };
+    const task = await this.db.interviewTask.findFirst({ where: { id: taskId, workspaceId: identity.workspaceId, createdBy: identity.actorId } });
+    if (!task) throw new NotFoundException({ code: 'RECORD_NOT_FOUND' });
+    const where = { taskId_round_createdBy: { taskId, round, createdBy: identity.actorId } };
     let session;
     try {
       session = await this.db.interviewSession.upsert({ where, update: {}, create: {
-        projectId, workspaceId: identity.workspaceId, createdBy: identity.actorId, round,
+        taskId, workspaceId: identity.workspaceId, createdBy: identity.actorId, round,
       } });
     } catch (error) {
       if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
@@ -40,8 +41,8 @@ export class MeetingRecordsService {
   private async session(identity: Identity, id: string) {
     const session = await this.db.interviewSession.findFirst({ where: {
       id, workspaceId: identity.workspaceId, createdBy: identity.actorId,
-      project: { workspaceId: identity.workspaceId, createdBy: identity.actorId },
-    }, select: { id: true, projectId: true, round: true, project: { select: { title: true } } } });
+      task: { workspaceId: identity.workspaceId, createdBy: identity.actorId },
+    }, select: { id: true, taskId: true, round: true, task: { select: { job: { select: { title: true } }, candidate: { select: { name: true } } } } } });
     if (!session) throw new NotFoundException({ code: 'RECORD_NOT_FOUND' });
     return session;
   }

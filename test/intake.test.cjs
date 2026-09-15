@@ -10,7 +10,7 @@ const { ConfigService } = require('@nestjs/config');
 const { AppModule } = require('../dist/app.module');
 const { PrismaService } = require('../dist/persistence/prisma.service');
 const { ParsingService } = require('../dist/intake/parsing.service');
-const { ProjectsService } = require('../dist/intake/projects.service');
+const { JobsService } = require('../dist/intake/jobs.service');
 const { WorkspaceGuard } = require('../dist/intake/workspace.guard');
 const { AiService } = require('../dist/intake/ai.service');
 
@@ -69,31 +69,31 @@ test('intake persistence, validation, parsing and recovery', async (t) => {
   await worker.onModuleDestroy();
   const base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`;
   const send = (path, body, key = randomUUID(), method = 'POST') => fetch(base + path, { method, headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(body) });
-  const input = { jd: { text: 'Backend Engineer\n\nBuild reliable APIs.', effectiveSource: 'text' }, materials: [] };
-  const ids = [];
-  let project;
+  const input = { jd: { text: 'Backend Engineer\n\nBuild reliable APIs.', effectiveSource: 'text' }, resumes: [] };
+  let job;
   try {
     await t.test('JD-only persists; concurrent retries deduplicate; changed payload conflicts', async () => {
       const key = randomUUID();
-      const responses = await Promise.all([send('/projects', input, key), send('/projects', input, key)]);
+      const responses = await Promise.all([send('/jobs', input, key), send('/jobs', input, key)]);
       assert.ok(responses.every((r) => r.status === 201));
-      const [a, b] = await Promise.all(responses.map((r) => r.json())); project = a; ids.push(a.id);
-      assert.equal(a.id, b.id); assert.equal(a.candidateName, null); assert.equal(a.jobs.length, 1);
-      assert.equal((await send('/projects', { ...input, jd: { ...input.jd, text: 'Different' } }, key)).status, 409);
-      assert.equal((await send('/projects', { jd: { text: '', effectiveSource: 'text' } })).status, 400);
-      const read = await (await fetch(`${base}/projects/${a.id}`)).json(); assert.equal(read.jdText, input.jd.text);
+      const [a, b] = await Promise.all(responses.map((r) => r.json())); job = a;
+      assert.equal(a.id, b.id); assert.equal(a.tasks.length, 0); assert.equal(a.parseJobs.length, 1);
+      assert.equal((await send('/jobs', { ...input, jd: { ...input.jd, text: 'Different' } }, key)).status, 409);
+      assert.equal((await send('/jobs', { jd: { text: '', effectiveSource: 'text' } })).status, 400);
+      const read = await (await fetch(`${base}/jobs/${a.id}`)).json(); assert.equal(read.jdText, input.jd.text);
     });
     await t.test('workspace isolation and production fail-closed guard', async () => {
-      await assert.rejects(app.get(ProjectsService).get('different-workspace', project.id), (e) => e.getStatus() === 404);
+      await assert.rejects(app.get(JobsService).get('different-workspace', job.id), (e) => e.getStatus() === 404);
       const guard = new WorkspaceGuard(new ConfigService({ NODE_ENV: 'production', DEV_AUTH_ENABLED: 'true' }));
       assert.throws(() => guard.canActivate({}), (e) => e.getStatus() === 401);
     });
+    let resumeMaterial;
     await t.test('real TXT, PDF and DOCX extraction; OCR, invalid and oversized files', async () => {
       const upload = async (name, content) => { const form = new FormData(); form.append('file', new Blob([content]), name); return fetch(`${base}/materials`, { method: 'POST', body: form }); };
-      let response = await upload('resume.txt', 'Ada Example\n\nBuilt APIs with NestJS.');
-      assert.equal(response.status, 201); const material = await response.json();
-      assert.equal(material.readStatus, 'available'); assert.match(material.text, /Ada/);
-      assert.equal(material.storageKey, undefined);
+      let response = await upload('Ada_Example.txt', 'Ada Example\n\nBuilt APIs with NestJS.');
+      assert.equal(response.status, 201); resumeMaterial = await response.json();
+      assert.equal(resumeMaterial.readStatus, 'available'); assert.match(resumeMaterial.text, /Ada/);
+      assert.equal(resumeMaterial.storageKey, undefined);
       assert.equal((await upload('fake.pdf', 'not pdf')).status, 400);
       assert.equal((await upload('empty.txt', '')).status, 400);
       assert.equal((await upload('large.txt', Buffer.alloc(10 * 1024 * 1024 + 1))).status, 413);
@@ -106,15 +106,26 @@ test('intake persistence, validation, parsing and recovery', async (t) => {
       zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>DOCX Engineer</w:t></w:r></w:p></w:body></w:document>');
       response = await upload('role.docx', await zip.generateAsync({ type: 'nodebuffer' }));
       assert.equal(response.status, 201); assert.match((await response.json()).text, /DOCX Engineer/);
-      response = await send(`/projects/${project.id}/materials`, { materialId: material.id, kind: 'resume' });
-      assert.equal(response.status, 201); assert.equal((await response.json()).materials.length, 1);
     });
-    await t.test('AI extraction is sourced and never silently edits project fields', async () => {
-      await worker.tick();
-      const job = await db.parseJob.findFirst({ where: { projectId: project.id, type: 'jd' } });
-      assert.equal(job.status, 'needs_review'); assert.equal(job.result.title.segmentId, 's1');
-      const original = await db.project.findUnique({ where: { id: project.id } });
+    let task;
+    await t.test('linking a résumé creates exactly one task per (job, candidate); relinking reuses it', async () => {
+      let response = await send(`/jobs/${job.id}/tasks`, { materialId: resumeMaterial.id });
+      assert.equal(response.status, 201); task = await response.json();
+      assert.equal(task.candidate.name, 'Ada Example');
+      assert.equal(task.job.id, job.id);
+      const again = await send(`/jobs/${job.id}/tasks`, { materialId: resumeMaterial.id });
+      assert.equal((await again.json()).id, task.id, 'relinking the same résumé reuses the same task');
+      const refreshed = await (await fetch(`${base}/jobs/${job.id}`)).json();
+      assert.equal(refreshed.tasks.length, 1);
+    });
+    await t.test('AI extraction is sourced and never silently edits job or candidate fields', async () => {
+      await worker.tick(); await worker.tick();
+      const jdParse = await db.parseJob.findFirst({ where: { jobId: job.id, type: 'jd' } });
+      assert.equal(jdParse.status, 'needs_review'); assert.equal(jdParse.result.title.segmentId, 's1');
+      const original = await db.job.findUnique({ where: { id: job.id } });
       assert.equal(original.reviewed, false); assert.equal(original.title, 'Backend Engineer');
+      const candidate = await db.candidate.findUnique({ where: { id: task.candidate.id } });
+      assert.equal(candidate.name, 'Ada Example');
     });
     await t.test('invalid AI responses and missing configuration stay explicit', async () => {
       const ai = app.get(AiService); const source = { sourceId: 'test', segments: [{ id: 's1', text: 'Engineer' }] };
@@ -124,24 +135,33 @@ test('intake persistence, validation, parsing and recovery', async (t) => {
       await assert.rejects(new AiService({ get: () => undefined }).extract('jd', source), (e) => e.code === 'AI_NOT_CONFIGURED');
     });
     await t.test('manual changes use optimistic locking and a separate JD version', async () => {
-      const body = { version: 1, title: 'Reviewed role', candidateName: 'Ada Example', candidateEmail: 'ada@example.test', jdText: 'Updated role requirements' };
-      let response = await send(`/projects/${project.id}/intake`, body, '', 'PATCH');
+      const body = { version: 1, title: 'Reviewed role', department: null, location: null, level: null, recruitingStatus: 'open', jdText: 'Updated role requirements' };
+      let response = await send(`/jobs/${job.id}/intake`, body, '', 'PATCH');
       assert.equal(response.status, 200); const saved = await response.json();
       assert.equal(saved.version, 2); assert.equal(saved.jdVersion, 2); assert.equal(saved.reviewed, true);
-      response = await send(`/projects/${project.id}/intake`, body, '', 'PATCH'); assert.equal(response.status, 409);
-      assert.equal(await db.revision.count({ where: { projectId: project.id } }), 2);
+      response = await send(`/jobs/${job.id}/intake`, body, '', 'PATCH'); assert.equal(response.status, 409);
+      assert.equal(await db.revision.count({ where: { jobId: job.id } }), 2);
+    });
+    await t.test('task status changes are versioned independently of the job', async () => {
+      const body = { version: 1, status: 'ready_to_schedule' };
+      const response = await send(`/tasks/${task.id}/intake`, body, '', 'PATCH');
+      assert.equal(response.status, 200); const saved = await response.json();
+      assert.equal(saved.status, 'ready_to_schedule'); assert.equal(saved.reviewed, true);
+      assert.equal(await db.revision.count({ where: { taskId: task.id } }), 1);
     });
     await t.test('expired leases recover without overriding human edits', async () => {
-      await db.parseJob.updateMany({ where: { projectId: project.id, type: 'resume' }, data: { status: 'failed' } });
-      const job = await db.parseJob.findFirst({ where: { projectId: project.id, type: 'jd', inputVersion: 2 } });
-      await db.parseJob.update({ where: { id: job.id }, data: { status: 'parsing', leaseToken: 'dead-worker', leaseUntil: new Date(0) } });
+      await db.parseJob.updateMany({ where: { taskId: null, resumeId: { not: null } }, data: { status: 'failed' } });
+      const jdParse = await db.parseJob.findFirst({ where: { jobId: job.id, type: 'jd', inputVersion: 2 } });
+      await db.parseJob.update({ where: { id: jdParse.id }, data: { status: 'parsing', leaseToken: 'dead-worker', leaseUntil: new Date(0) } });
       await worker.tick();
-      assert.equal((await db.parseJob.findUnique({ where: { id: job.id } })).status, 'needs_review');
-      assert.equal((await db.project.findUnique({ where: { id: project.id } })).title, 'Reviewed role');
+      assert.equal((await db.parseJob.findUnique({ where: { id: jdParse.id } })).status, 'needs_review');
+      assert.equal((await db.job.findUnique({ where: { id: job.id } })).title, 'Reviewed role');
     });
   } finally {
     const materials = await db.material.findMany({ where: { workspaceId } });
-    await db.project.deleteMany({ where: { workspaceId } });
+    await db.interviewTask.deleteMany({ where: { workspaceId } });
+    await db.candidate.deleteMany({ where: { workspaceId } });
+    await db.job.deleteMany({ where: { workspaceId } });
     await db.material.deleteMany({ where: { workspaceId } });
     for (const material of materials) await unlink(resolve(process.env.STORAGE_DIR || '.local/materials', material.storageKey)).catch(() => {});
     await app.close(); await new Promise((done) => model.close(done));

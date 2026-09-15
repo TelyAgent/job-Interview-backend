@@ -48,15 +48,18 @@ export class ParsingService implements OnModuleInit, OnModuleDestroy {
   }
   async get(workspaceId: string, id: string) {
     const job = await this.db.parseJob.findFirst({ where: { id, workspaceId }, select: {
-      id: true, projectId: true, type: true, status: true, errorCode: true, result: true, inputVersion: true, attempt: true,
+      id: true, jobId: true, resumeId: true, taskId: true, type: true, status: true, errorCode: true, result: true, inputVersion: true, attempt: true,
     } });
     if (!job) throw new NotFoundException({ code: 'NOT_FOUND' });
     return job;
   }
   async retry(workspaceId: string, id: string) {
     const job = await this.get(workspaceId, id);
-    const project = await this.db.project.findUniqueOrThrow({ where: { id: job.projectId } });
-    if (job.type !== 'resume' && job.inputVersion !== project.jdVersion) throw new ConflictException({ code: 'VERSION_CONFLICT' });
+    // Only JD/requirements extractions are pinned to a JD version; résumé parsing has none.
+    if (job.jobId) {
+      const owner = await this.db.job.findUniqueOrThrow({ where: { id: job.jobId } });
+      if (job.inputVersion !== owner.jdVersion) throw new ConflictException({ code: 'VERSION_CONFLICT' });
+    }
     const changed = await this.db.parseJob.updateMany({ where: { id, workspaceId, status: 'failed' }, data: { status: 'queued', attempt: 0, errorCode: null, nextRunAt: new Date() } });
     if (!changed.count) throw new ConflictException({ code: 'TASK_NOT_FAILED' });
     return this.get(workspaceId, id);

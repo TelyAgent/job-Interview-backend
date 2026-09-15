@@ -2,15 +2,38 @@ import { z } from 'zod';
 import { BadRequestException } from '@nestjs/common';
 
 export const kindSchema = z.enum(['resume', 'screening', 'assessment', 'other']);
-export const createSchema = z.object({
+export const taskMaterialKindSchema = z.enum(['screening', 'assessment', 'other']);
+export const recruitingStatusSchema = z.enum(['open', 'paused', 'closed', 'unknown']);
+export const taskStatusSchema = z.enum([
+  'draft', 'requirements_ready', 'planning', 'ready_to_schedule', 'interview_in_progress',
+  'evidence_requested', 'awaiting_confirmation', 'package_published', 'on_hold', 'not_proceeding',
+]);
+
+// Creates a Job and, for each résumé attached, a Candidate + Task in the same call —
+// one JD can be matched against several résumés at once.
+export const createJobSchema = z.object({
   jd: z.object({ text: z.string().max(150000).optional(), materialId: z.string().uuid().optional(), effectiveSource: z.enum(['text', 'file']) }).strict(),
-  materials: z.array(z.object({ materialId: z.string().uuid(), kind: kindSchema }).strict()).max(10).default([]),
+  resumes: z.array(z.object({ materialId: z.string().uuid() }).strict()).max(10).default([]),
 }).strict();
-export const reviewSchema = z.object({
+
+// Links one more résumé to an existing Job (the "link candidate" action).
+export const createTaskSchema = z.object({ materialId: z.string().uuid() }).strict();
+
+// Attaches a task-specific material (screening report, assessment result, other) —
+// résumés are attached via createTaskSchema instead, since they always create a task.
+export const attachTaskMaterialSchema = z.object({ materialId: z.string().uuid(), kind: taskMaterialKindSchema }).strict();
+
+export const reviewJobSchema = z.object({
   version: z.number().int().positive(), title: z.string().trim().min(1).max(200),
-  candidateName: z.string().trim().max(200).nullable(),
-  candidateEmail: z.union([z.email(), z.literal('')]).nullable(),
+  department: z.string().trim().max(200).nullable(),
+  location: z.string().trim().max(200).nullable(),
+  level: z.string().trim().max(100).nullable(),
+  recruitingStatus: recruitingStatusSchema,
   jdText: z.string().trim().min(1).max(150000),
+}).strict();
+
+export const reviewTaskSchema = z.object({
+  version: z.number().int().positive(), status: taskStatusSchema,
 }).strict();
 export type Segment = { id: string; text: string; page?: number };
 export type ParseInput = { segments: Segment[]; sourceId: string };

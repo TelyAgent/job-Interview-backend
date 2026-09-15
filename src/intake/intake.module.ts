@@ -3,9 +3,11 @@ import { PrismaService } from '../persistence/prisma.service';
 import { AiService } from './ai.service';
 import { IntakeController } from './intake.controller';
 import { MaterialsService } from './materials.service';
-import { ProjectsService } from './projects.service';
+import { CandidatesService } from './candidates.service';
+import { JobsService } from './jobs.service';
+import { TasksService } from './tasks.service';
 import { ParsingService } from './parsing.service';
 import { WorkspaceGuard } from './workspace.guard';
 
-@Module({ controllers: [IntakeController], providers: [PrismaService, AiService, MaterialsService, ProjectsService, ParsingService, WorkspaceGuard] })
+@Module({ controllers: [IntakeController], providers: [PrismaService, AiService, MaterialsService, CandidatesService, JobsService, TasksService, ParsingService, WorkspaceGuard] })
 export class IntakeModule {}

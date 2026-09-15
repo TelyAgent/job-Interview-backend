@@ -13,7 +13,10 @@ export class MaterialsService {
   constructor(private readonly db: PrismaService, private readonly config: ConfigService) {}
   async upload(workspaceId: string, file?: Express.Multer.File) {
     if (!file || !file.size) throw new BadRequestException({ code: 'EMPTY_FILE' });
-    const ext = extname(file.originalname).toLowerCase();
+    // multer/busboy decode the multipart filename header as latin1; re-decode as UTF-8 so
+    // non-ASCII names (e.g. Chinese résumé filenames) survive intact. ASCII names are unaffected.
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    const ext = extname(originalName).toLowerCase();
     const mime = { '.pdf': 'application/pdf', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.txt': 'text/plain' }[ext];
     if (!mime || (ext === '.pdf' && file.buffer.subarray(0, 5).toString() !== '%PDF-') ||
       (ext === '.docx' && file.buffer.subarray(0, 2).toString() !== 'PK')) {
@@ -45,7 +48,7 @@ export class MaterialsService {
     await writeFile(path, file.buffer, { mode: 0o600, flag: 'wx' });
     try {
       const material = await this.db.material.create({ data: {
-        workspaceId, name: file.originalname.slice(0, 255), mime, size: file.size, storageKey,
+        workspaceId, name: originalName.slice(0, 255), mime, size: file.size, storageKey,
         hash: createHash('sha256').update(file.buffer).digest('hex'),
         text: segments.map((s) => s.text).join('\n\n'), segments,
         readStatus: errorCode ? 'failed' : 'available', errorCode,

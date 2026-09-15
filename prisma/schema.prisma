@@ -7,27 +7,92 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Project {
-  id             String   @id @default(uuid())
-  workspaceId    String
-  createdBy      String
-  requestKey     String
-  requestHash    String
-  title          String
-  candidateName  String?
-  candidateEmail String?
-  jdText         String
-  version        Int      @default(1)
-  jdVersion      Int      @default(1)
-  reviewed       Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  materials      ProjectMaterial[]
-  jobs           ParseJob[]
-  revisions      Revision[]
-  interviewSessions InterviewSession[]
+// JD. One Job can be matched against many résumés handed off from Resume Screening;
+// a Job with zero tasks is still a valid JD-only draft (see InterviewTask below).
+model Job {
+  id               String   @id @default(uuid())
+  workspaceId      String
+  createdBy        String
+  requestKey       String
+  requestHash      String
+  title            String
+  department       String?
+  location         String?
+  level            String?
+  jdText           String
+  version          Int      @default(1)
+  jdVersion        Int      @default(1)
+  reviewed         Boolean  @default(false)
+  recruitingStatus String   @default("unknown") // open | paused | closed | unknown
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  materials        JobMaterial[]
+  parseJobs        ParseJob[]
+  revisions        Revision[]
+  tasks            InterviewTask[]
   @@unique([workspaceId, createdBy, requestKey])
   @@index([workspaceId, createdAt])
+}
+
+// Candidate identity, kept separate from Job/Task so the same person can be matched
+// against multiple JDs without duplicating their profile.
+model Candidate {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  email       String?
+  phone       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  resumes     Resume[]
+  tasks       InterviewTask[]
+  @@index([workspaceId, createdAt])
+}
+
+// A résumé file, layered on top of the generic Material (file/text/segments/readStatus).
+// A candidate can have more than one résumé version over time.
+model Resume {
+  id          String    @id @default(uuid())
+  workspaceId String
+  candidateId String
+  materialId  String    @unique
+  parsedAt    DateTime?
+  createdAt   DateTime  @default(now())
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  material    Material  @relation(fields: [materialId], references: [id])
+  parseJobs   ParseJob[]
+  tasks       InterviewTask[]
+  @@index([workspaceId, candidateId])
+}
+
+// The Application: one Job + one Candidate is one unique interview task. This is the
+// row everything else (sessions, revisions, task-specific materials) hangs off of.
+model InterviewTask {
+  id                   String    @id @default(uuid())
+  workspaceId          String
+  createdBy            String
+  jobId                String
+  candidateId          String
+  resumeId             String?
+  status               String    @default("draft")
+  version              Int       @default(1)
+  reviewed             Boolean   @default(false)
+  matchScore           Int?      // 0-100, handed off from Resume Screening
+  matchRecommendation  String?   // strong_match | match | weak_match
+  screeningHandedOffAt DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  job                  Job       @relation(fields: [jobId], references: [id])
+  candidate            Candidate @relation(fields: [candidateId], references: [id])
+  resume               Resume?   @relation(fields: [resumeId], references: [id])
+  materials            TaskMaterial[]
+  parseJobs            ParseJob[]
+  revisions            Revision[]
+  interviewSessions    InterviewSession[]
+  @@unique([jobId, candidateId])
+  @@index([workspaceId, createdAt])
+  @@index([jobId])
+  @@index([candidateId])
 }
 
 model Material {
@@ -43,65 +108,88 @@ model Material {
   readStatus  String
   errorCode   String?
   createdAt   DateTime @default(now())
-  projects    ProjectMaterial[]
+  jobs        JobMaterial[]
+  tasks       TaskMaterial[]
+  resume      Resume?
   @@index([workspaceId, hash])
 }
 
-model ProjectMaterial {
-  projectId  String
+model JobMaterial {
+  jobId      String
   materialId String
   kind       String
-  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
   material   Material @relation(fields: [materialId], references: [id])
-  @@id([projectId, materialId])
+  @@id([jobId, materialId])
 }
 
+model TaskMaterial {
+  taskId     String
+  materialId String
+  kind       String
+  task       InterviewTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  material   Material      @relation(fields: [materialId], references: [id])
+  @@id([taskId, materialId])
+}
+
+// One shared parse queue for JD, requirements and résumé extraction. Exactly one of
+// jobId/resumeId/taskId is set per row, matching who owns that piece of content.
 model ParseJob {
-  id           String   @id @default(uuid())
-  projectId    String
-  workspaceId  String
-  type         String
-  materialId   String?
-  inputVersion Int
-  input        Json
-  status       String   @default("queued")
-  attempt      Int      @default(0)
-  leaseToken   String?
-  leaseUntil   DateTime?
-  nextRunAt    DateTime @default(now())
-  errorCode    String?
-  result       Json?
-  model        String?
-  promptVersion String @default("intake-v1")
-  usage        Json?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id            String   @id @default(uuid())
+  workspaceId   String
+  jobId         String?
+  resumeId      String?
+  taskId        String?
+  type          String
+  materialId    String?
+  inputVersion  Int
+  input         Json
+  status        String   @default("queued")
+  attempt       Int      @default(0)
+  leaseToken    String?
+  leaseUntil    DateTime?
+  nextRunAt     DateTime @default(now())
+  errorCode     String?
+  result        Json?
+  model         String?
+  promptVersion String   @default("intake-v1")
+  usage         Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  job           Job?           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  resume        Resume?        @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  task          InterviewTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
   @@index([status, nextRunAt])
-  @@index([projectId, inputVersion])
+  @@index([jobId, inputVersion])
+  @@index([resumeId, inputVersion])
 }
 
+// Audit trail, similarly polymorphic: a JD edit records against jobId, a task-level
+// decision/edit records against taskId.
 model Revision {
   id        String   @id @default(uuid())
-  projectId String
+  jobId     String?
+  taskId    String?
   actorId   String
   version   Int
   payload   Json
   createdAt DateTime @default(now())
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  @@unique([projectId, version])
+  job       Job?           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  task      InterviewTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  @@unique([jobId, version])
+  @@unique([taskId, version])
 }
 
 model InterviewSession {
   id          String @id @default(uuid())
   workspaceId String
-  projectId   String
+  taskId      String
   createdBy   String
   round       Int
   createdAt   DateTime @default(now())
-  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task        InterviewTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
   notes       RecordNote[]
-  @@unique([projectId, round, createdBy])
+  @@unique([taskId, round, createdBy])
   @@index([workspaceId, createdBy])
 }
 
